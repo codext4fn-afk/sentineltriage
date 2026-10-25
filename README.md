@@ -17,7 +17,13 @@
 
 ## Installation
 
-Requires Go 1.26 or later.
+Prebuilt binaries for Linux, macOS, Windows, and FreeBSD are on the [releases page](https://github.com/codext4fn-afk/sentineltriage/releases). Each release includes `checksums.txt` and a build provenance attestation:
+
+```sh
+gh attestation verify sentinel_<version>_linux_amd64.tar.gz --repo codext4fn-afk/sentineltriage
+```
+
+With Go 1.26 or later:
 
 ```sh
 go install github.com/codext4fn-afk/sentineltriage/cmd/sentinel@latest
