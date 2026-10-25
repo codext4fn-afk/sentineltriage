@@ -14,7 +14,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"html/template"
 	"io"
 	"strings"
 
@@ -24,6 +23,11 @@ import (
 )
 
 // Write renders the report for r into w.
+//
+// The page is assembled directly rather than through html/template. Every
+// inserted value is either a fixed constant or JSON produced below, so a
+// template engine would have nothing to escape; avoiding it also keeps the
+// report off html/template's vulnerability surface.
 func Write(w io.Writer, r *engine.Result, m jsonout.Meta) error {
 	// Technique names travel with the data so the page needs no lookup table
 	// of its own; only IDs that appear in this run are included.
@@ -39,13 +43,15 @@ func Write(w io.Writer, r *engine.Result, m jsonout.Meta) error {
 		Report     jsonout.Document  `json:"report"`
 		Techniques map[string]string `json:"techniques"`
 	}{jsonout.Build(r, m), names}
-	// Default HTML escaping turns <, >, & into < etc., so the payload
-	// contains no literal "<" and cannot terminate the <script> element.
+	// json.Marshal escapes <, >, and & as \u003c, \u003e, and \u0026, so the
+	// payload contains no literal "<" and cannot close the <script> element.
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 
+	// The CSP is built only from fixed directives and base64 hashes
+	// ([A-Za-z0-9+/=]), so it needs no attribute escaping.
 	csp := strings.Join([]string{
 		"default-src 'none'",
 		"style-src 'sha256-" + cspHash(styleCSS) + "'",
@@ -54,50 +60,41 @@ func Write(w io.Writer, r *engine.Result, m jsonout.Meta) error {
 		"form-action 'none'",
 	}, "; ")
 
-	// Emitted as a complete trusted tag so the single quotes are not entity-
-	// escaped by attribute-context escaping. Safe because the value is built
-	// only from fixed directives and base64 hashes, with no user data.
-	metaTag := template.HTML(`<meta http-equiv="Content-Security-Policy" content="` + csp + `">`)
-
-	return page.Execute(w, pageData{
-		CSPMeta: metaTag,
-		Style:   template.CSS(styleCSS),
-		Script:  template.JS(appJS),
-		Data:    template.JS(data),
-	})
-}
-
-type pageData struct {
-	CSPMeta template.HTML
-	Style   template.CSS
-	Script  template.JS
-	Data    template.JS
-}
-
-// cspHash returns the base64 SHA-256 of s for a CSP hash source. It must match
-// the exact emitted bytes; html/template renders template.CSS and template.JS
-// verbatim, so it does.
-func cspHash(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return base64.StdEncoding.EncodeToString(sum[:])
-}
-
-var page = template.Must(template.New("report").Parse(`<!doctype html>
+	var b strings.Builder
+	b.WriteString(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-{{.CSPMeta}}
+<meta http-equiv="Content-Security-Policy" content="`)
+	b.WriteString(csp)
+	b.WriteString(`">
 <title>sentinel report</title>
-<style>{{.Style}}</style>
+<style>`)
+	b.WriteString(styleCSS)
+	b.WriteString(`</style>
 </head>
 <body>
 <main id="app">loading report...</main>
-<script id="data" type="application/json">{{.Data}}</script>
-<script>{{.Script}}</script>
+<script id="data" type="application/json">`)
+	b.Write(data)
+	b.WriteString(`</script>
+<script>`)
+	b.WriteString(appJS)
+	b.WriteString(`</script>
 </body>
 </html>
-`))
+`)
+	_, err = io.WriteString(w, b.String())
+	return err
+}
+
+// cspHash returns the base64 SHA-256 of s for a CSP hash source. It must match
+// the exact bytes emitted between the tags, which Write copies verbatim.
+func cspHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
 
 const styleCSS = `
 :root{--bg:#1d1f21;--fg:#c5c8c6;--hi:#e0e0e0;--mute:#969896;--line:#7c7f84;--head:#4d5057;

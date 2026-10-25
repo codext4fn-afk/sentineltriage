@@ -17,7 +17,7 @@
 
 ## Installation
 
-Requires Go 1.25 or later.
+Requires Go 1.26 or later.
 
 ```sh
 go install github.com/codext4fn-afk/sentineltriage/cmd/sentinel@latest
