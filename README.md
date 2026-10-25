@@ -23,13 +23,39 @@ Prebuilt binaries for Linux, macOS, Windows, and FreeBSD are on the [releases pa
 gh attestation verify sentinel_<version>_linux_amd64.tar.gz --repo codext4fn-afk/sentineltriage
 ```
 
-With Go 1.26 or later:
+### Windows
+
+1. Download `sentinel_<version>_windows_amd64.zip` from the [releases page](https://github.com/codext4fn-afk/sentineltriage/releases) (`windows_arm64` for ARM devices such as Snapdragon laptops).
+2. Right-click the zip, choose **Properties**, tick **Unblock**, then **Extract All**.
+3. `sentinel` is a command-line program. Double-clicking it opens a console that closes as soon as the scan ends. Instead, right-click inside the extracted folder, choose **Open in Terminal**, and run:
+
+```powershell
+.\sentinel.exe -i
+```
+
+**"Windows protected your PC" or an antivirus warning.** The binaries are not signed with a paid Authenticode certificate, so SmartScreen has no reputation for them and may warn the first time they run. Some antivirus engines also flag unsigned Go binaries heuristically. This is common for open-source command-line tools and does not mean the file is malicious. Unblocking the zip before extracting (step 2) avoids the SmartScreen prompt, or choose **More info** and **Run anyway**.
+
+You do not have to take that on trust. Every release publishes `checksums.txt` and a signed build provenance attestation. To confirm your download is the file GitHub Actions built from this repository:
+
+```powershell
+# Compare with the matching line in checksums.txt
+(Get-FileHash .\sentinel_<version>_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+
+# Or verify the signed attestation (requires the GitHub CLI)
+gh attestation verify .\sentinel_<version>_windows_amd64.zip --repo codext4fn-afk/sentineltriage
+```
+
+If you would rather not run a prebuilt binary at all, build it from source as shown below.
+
+### With Go
+
+Go 1.26 or later:
 
 ```sh
 go install github.com/codext4fn-afk/sentineltriage/cmd/sentinel@latest
 ```
 
-From source:
+### From source
 
 ```sh
 git clone https://github.com/codext4fn-afk/sentineltriage
