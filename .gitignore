@@ -1,0 +1,6 @@
+/sentinel
+/sentinel.exe
+/dist/
+/sentinel-report/
+coverage.out
+*.test

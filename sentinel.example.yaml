@@ -1,0 +1,33 @@
+# SentinelTriage configuration. Pass with --config; it is never discovered
+# implicitly from the scanned tree. Unknown keys are a hard error.
+version: 1
+
+# Global wall-clock budget for the whole run, and the per-collector cap.
+budget: 10s
+collector_timeout: 5s
+
+# 0 = one worker per CPU.
+concurrency: 0
+
+# Exit 1 when any finding is at or above this severity.
+fail_on: high
+
+# Opt-in: exit 4 when weighted collector coverage drops below this ratio.
+min_coverage: 0.0
+
+engines:
+  host:
+    enabled: true
+    proc_root: /proc
+  audit:
+    enabled: true
+    paths: ["."]
+    max_file_bytes: 2097152   # 2 MiB; larger files are recorded as skipped
+    exclude: ["**/*.min.js", "testdata"]
+
+output:
+  dir: sentinel-report
+  formats: [json, sarif, html]
+  # Host-engine findings are repository-external; include them in SARIF only
+  # when you want them as code-scanning alerts.
+  sarif_include_host: false
