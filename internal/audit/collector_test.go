@@ -127,8 +127,8 @@ type recordingAnalyzer struct {
 }
 
 func (*recordingAnalyzer) Name() string { return "stub" }
-func (*recordingAnalyzer) Applies(f walker.File) bool {
-	return filepath.Base(f.Rel) == "Dockerfile"
+func (*recordingAnalyzer) Applies(rel string) bool {
+	return filepath.Base(rel) == "Dockerfile"
 }
 func (r *recordingAnalyzer) Analyze(f walker.File, _ func(finding.Finding)) {
 	r.mu.Lock()

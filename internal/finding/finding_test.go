@@ -91,6 +91,25 @@ func TestDefaultFingerprintIgnoresLineShift(t *testing.T) {
 	}
 }
 
+func TestDefaultFingerprintSeparatesDistinctEvidence(t *testing.T) {
+	a, b := validFinding(), validFinding()
+	a.Location = locAt("k8s/pod.yaml")
+	b.Location = locAt("k8s/pod.yaml")
+	a.Evidence = map[string]string{"container": "api", "kind": "Pod"}
+	b.Evidence = map[string]string{"kind": "Pod", "container": "sidecar"}
+	if a.DefaultFingerprint() == b.DefaultFingerprint() {
+		t.Error("two containers in one manifest share a fingerprint; dedup would drop one")
+	}
+	c := validFinding()
+	c.Location = locAt("k8s/pod.yaml")
+	c.Evidence = map[string]string{"kind": "Pod", "container": "api"}
+	if a.DefaultFingerprint() != c.DefaultFingerprint() {
+		t.Error("evidence map ordering changed the fingerprint")
+	}
+}
+
+func locAt(p string) Location { return Location{Path: p, StartLine: 3} }
+
 func TestCompareOrdersBySeverityFirst(t *testing.T) {
 	fs := []Finding{
 		{RuleID: "b", Severity: SeverityLow},

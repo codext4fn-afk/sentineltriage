@@ -70,8 +70,9 @@ type Engines struct {
 // HostEngine configures live host triage.
 type HostEngine struct {
 	Enabled bool `yaml:"enabled"`
-	// ProcRoot allows triage of a mounted image or a container's /proc.
-	ProcRoot string `yaml:"proc_root"`
+	// Root, when set, audits a mounted Linux filesystem (a disk image or a
+	// container rootfs) instead of the live system. It works from any OS.
+	Root string `yaml:"root"`
 }
 
 // AuditEngine configures the static repository audit.
@@ -106,7 +107,7 @@ func Default() Config {
 		Budget:  Duration(10 * time.Second),
 		FailOn:  finding.SeverityHigh,
 		Engines: Engines{
-			Host: HostEngine{Enabled: true, ProcRoot: "/proc"},
+			Host: HostEngine{Enabled: true},
 			Audit: AuditEngine{
 				Enabled:      true,
 				Paths:        []string{"."},
@@ -195,9 +196,6 @@ func (c *Config) Validate() error {
 	}
 	if !c.Engines.Host.Enabled && !c.Engines.Audit.Enabled {
 		errs = append(errs, errors.New("at least one engine must be enabled"))
-	}
-	if c.Engines.Host.Enabled && c.Engines.Host.ProcRoot == "" {
-		errs = append(errs, errors.New("engines.host.proc_root must be set"))
 	}
 	if c.Engines.Audit.Enabled {
 		if len(c.Engines.Audit.Paths) == 0 {

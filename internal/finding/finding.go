@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/codext4fn-afk/sentineltriage/internal/attack"
@@ -115,9 +116,21 @@ func Fingerprint(parts ...string) string {
 
 // DefaultFingerprint is applied when a collector leaves Fingerprint empty. Line
 // numbers are deliberately excluded so that inserting code above a finding
-// does not resurrect a baselined issue.
+// does not resurrect a baselined issue. Evidence is included, in key order, to
+// keep distinct findings of one rule in one file apart (two containers in the
+// same manifest, two stages in one Dockerfile); de-duplication would otherwise
+// merge them.
 func (f *Finding) DefaultFingerprint() string {
-	return Fingerprint(f.RuleID, f.Location.Path, f.Location.Artifact, f.Evidence["match_digest"])
+	parts := []string{f.RuleID, f.Location.Path, f.Location.Artifact}
+	keys := make([]string, 0, len(f.Evidence))
+	for k := range f.Evidence {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		parts = append(parts, k, f.Evidence[k])
+	}
+	return Fingerprint(parts...)
 }
 
 // Compare orders findings for deterministic output: highest severity first,

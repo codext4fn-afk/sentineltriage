@@ -1,18 +1,18 @@
-// Package persistence audits Linux persistence mechanisms by reading system
+// Package linuxpersist audits Linux persistence mechanisms by reading system
 // configuration files only: the dynamic-linker preload list, cron tables, and
 // systemd unit and timer files. It never inspects other processes' memory or
 // environment; its inputs are on-disk configuration an administrator can read
 // and reason about.
 //
 // All reads go through an fs.FS so the collector is unit-testable on any OS
-// against a synthetic tree; the live root is injected per platform via build
-// tags.
-package persistence
+// against a synthetic tree. Platform selection lives in internal/host.
+package linuxpersist
 
 import (
 	"context"
 	"io"
 	"io/fs"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,19 +28,19 @@ const maxFileBytes = 1 << 20
 
 // Collector audits persistence configuration under its root.
 type Collector struct {
-	root        fs.FS
-	unsupported bool
+	root fs.FS
 }
 
+// New returns a collector rooted at the live filesystem. os.DirFS is confined
+// to the given root, so glob and open cannot traverse above "/".
+func New() *Collector { return FromFS(os.DirFS("/")) }
+
 // FromFS builds a collector over an arbitrary filesystem root, used by tests
-// and by the per-platform constructors.
+// and by New.
 func FromFS(root fs.FS) *Collector { return &Collector{root: root} }
 
-// Unsupported returns a collector that reports the platform gap at run time.
-func Unsupported() *Collector { return &Collector{unsupported: true} }
-
 // Name implements engine.Collector.
-func (c *Collector) Name() string { return "host.persistence" }
+func (c *Collector) Name() string { return "host.persistence.linux" }
 
 // Engine implements engine.Collector.
 func (c *Collector) Engine() finding.Engine { return finding.EngineHost }
@@ -53,9 +53,6 @@ var tempExec = regexp.MustCompile(`(^|[\s=:"'])(/tmp/|/dev/shm/|/var/tmp/)`)
 // error on one path is recorded as a coverage gap and the audit proceeds, so a
 // non-root run still reports everything it can read.
 func (c *Collector) Run(ctx context.Context, sink engine.Sink) error {
-	if c.unsupported {
-		return engine.ErrUnsupported
-	}
 	for _, probe := range []func(context.Context, engine.Sink){
 		c.checkPreload,
 		c.checkCron,

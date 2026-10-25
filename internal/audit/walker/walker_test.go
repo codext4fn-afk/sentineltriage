@@ -122,6 +122,41 @@ func TestWalkDoesNotFollowSymlinks(t *testing.T) {
 	}
 }
 
+func TestWalkSelectSkipsBeforeOpening(t *testing.T) {
+	root := writeTree(t, map[string]string{"Dockerfile": "FROM x", "notes.txt": "n"})
+	// An unreadable file proves Select runs before open: if it were opened,
+	// the walk would record a read-error Skip for it.
+	locked := filepath.Join(root, "locked.bin")
+	if err := os.WriteFile(locked, []byte("x"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	res, err := Walk(context.Background(), Options{Roots: []string{root}, Select: func(rel string) bool {
+		return rel == "Dockerfile"
+	}}, func(f File) error { seen = append(seen, f.Rel); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0] != "Dockerfile" {
+		t.Errorf("selected %v, want [Dockerfile]", seen)
+	}
+	if len(res.Skipped) != 0 {
+		t.Errorf("rejected files reported as skips: %+v", res.Skipped)
+	}
+}
+
+func TestWalkBinaryDetectedFromHeadOnly(t *testing.T) {
+	root := t.TempDir()
+	big := append([]byte{0x7f, 'E', 'L', 'F', 0x00}, make([]byte, 4<<20)...)
+	if err := os.WriteFile(filepath.Join(root, "tool"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, res := collect(t, Options{Roots: []string{root}})
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != "binary" {
+		t.Errorf("skips = %+v, want one binary skip", res.Skipped)
+	}
+}
+
 func TestWalkCancellation(t *testing.T) {
 	root := writeTree(t, map[string]string{"a.conf": "1", "b.conf": "2", "c.conf": "3"})
 	ctx, cancel := context.WithCancel(context.Background())

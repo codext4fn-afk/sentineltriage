@@ -1,239 +1,223 @@
-# SentinelTriage
+# sentineltriage
 
-A lightweight, dependency-light CLI for **DevSecOps auditing** and **Linux host persistence triage**. It walks a repository for infrastructure-as-code misconfigurations and missing HTTP security headers, inspects a Linux host's persistence configuration, maps findings to **MITRE ATT&CK**, and emits machine-readable **JSON**, GitHub-compatible **SARIF 2.1.0**, and a self-contained **HTML** dashboard — with an exit-code contract designed to gate CI/CD pipelines.
+[![CI](https://github.com/codext4fn-afk/sentineltriage/actions/workflows/ci.yml/badge.svg)](https://github.com/codext4fn-afk/sentineltriage/actions/workflows/ci.yml)
+[![Go version](https://img.shields.io/github/go-mod/go-version/codext4fn-afk/sentineltriage)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **Scope and intent.** SentinelTriage is a defensive auditing tool. It reads *configuration*: repository files and Linux system config (cron, systemd, `ld.so.preload`). It does **not** read other processes' memory or environment variables, and it ships **no credential-extraction rules**. For secret scanning, run a dedicated scanner (gitleaks, trufflehog) as a separate pipeline step and merge its SARIF alongside this tool's output.
+`sentinel` audits infrastructure-as-code for insecure settings and inspects a host's autostart configuration for persistence. Findings are mapped to MITRE ATT&CK and written as JSON, SARIF 2.1.0, and a standalone HTML report. The exit code is meant to fail a CI job.
 
----
+<p align="center">
+  <img src="docs/assets/dashboard.svg" alt="sentinel terminal output" width="900">
+</p>
 
-## Highlights
+- **Audit engine:** Dockerfiles, Kubernetes manifests, and web server header configuration.
+- **Host engine:** Run keys, Winlogon, Startup folders, scheduled tasks, and services on Windows; `ld.so.preload`, cron, and systemd on Linux. Can also audit a mounted Linux filesystem offline.
+- **Output:** terminal dashboard, interactive TUI (`-i`), JSON, SARIF for GitHub code scanning, self-contained HTML.
+- **Single static binary**, no cgo. Reads configuration only, never process memory or environment.
 
-- **Failure-isolated engine.** Every collector runs inside a recovery boundary with its own deadline. A panicking or hung collector cannot crash the run or block its siblings; its partial results are sealed and the gap is recorded.
-- **Honest coverage.** A permission-denied path is reported as a *coverage gap*, not silence. Absence of findings is only meaningful next to the list of what could not be examined.
-- **Deterministic output.** Findings are sorted and de-duplicated by a line-stable fingerprint, so SARIF and JSON diffs in review reflect real changes, not reordering.
-- **CI-first exit codes.** Distinct codes for "findings", "usage error", "runtime failure", and "coverage too low" — a broken scanner never masquerades as a passing gate.
-- **Self-contained reports.** The HTML dashboard inlines all CSS/JS and ships a strict, hash-pinned Content-Security-Policy; no external resources, no network.
-- **Minimal supply chain.** The default binary depends on two zero-to-few-dependency modules. The Bubble Tea live view and its tree are opt-in behind `-tags tui`.
+## Installation
 
----
+Requires Go 1.25 or later.
 
-## Architecture
-
-```mermaid
-flowchart LR
-    CLI[cli: flags · config · exit codes] --> ORch[engine orchestrator]
-    ORch -->|budget + per-unit timeout| B1[boundary: recover + deadline]
-    ORch -->|budget + per-unit timeout| B2[boundary: recover + deadline]
-    B1 --> HC[host: persistence collector]
-    B2 --> AC[audit: file collector]
-    AC --> WK[walker: size cap · binary sniff · no symlinks]
-    WK --> AN{analyzers}
-    AN --> DF[Dockerfile drift]
-    AN --> K8[Kubernetes drift]
-    AN --> HD[security headers]
-    HC --> SINK[per-collector sink: validate + copy + cap]
-    AN --> SINK
-    SINK --> AGG[aggregator: sort · dedupe · coverage]
-    AGG --> JSON[JSON telemetry]
-    AGG --> SARIF[SARIF 2.1.0]
-    AGG --> HTML[HTML dashboard]
-    AGG --> UI[terminal UI / TUI]
+```sh
+go install github.com/codext4fn-afk/sentineltriage/cmd/sentinel@latest
 ```
 
-### Concurrency and failure isolation
+From source:
 
-```mermaid
-sequenceDiagram
-    participant O as Orchestrator
-    participant G as Collector goroutine
-    participant S as Sealed buffer
-    O->>O: ctx = WithTimeout(budget)
-    O->>G: run(unit) with per-unit deadline + recover()
-    G-->>S: Emit() findings (copied, validated, capped)
-    alt finishes in time
-        G-->>O: nil / error
-    else exceeds deadline
-        O->>G: cancel; wait grace period
-        O->>S: seal() — later Emits discarded
-        Note over O,G: uncooperative goroutine is abandoned, not awaited
-    end
-    O->>O: aggregate → sort → dedupe → coverage
-```
-
-### Exit-code decision
-
-```mermaid
-flowchart TD
-    A[run complete] --> B{interrupted?}
-    B -- yes --> C[130]
-    B -- no --> D{report write failed?}
-    D -- yes --> E[3 runtime]
-    D -- no --> F{findings &ge; fail-on?}
-    F -- yes --> G[1 findings]
-    F -- no --> H{any collector observed its scope?}
-    H -- no --> I[3 runtime]
-    H -- yes --> J{coverage &lt; min-coverage?}
-    J -- yes --> K[4 coverage]
-    J -- no --> L[0 clean]
-```
-
----
-
-## Install & build
-
-```bash
-# Standard binary (no TUI dependencies)
-go build -o sentinel ./cmd/sentinel
-
-# With the interactive Bubble Tea live view
-go build -tags tui -o sentinel ./cmd/sentinel
-
-# Reproducible, stripped, static (no cgo)
+```sh
+git clone https://github.com/codext4fn-afk/sentineltriage
+cd sentineltriage
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o sentinel ./cmd/sentinel
 ```
 
-Requires Go 1.25+. Builds for linux, darwin, windows, and freebsd on amd64/arm64.
-
----
+Builds for Linux, macOS, Windows, and FreeBSD on amd64 and arm64.
 
 ## Usage
 
-```bash
-# Audit the current repository and triage the host
-sentinel
-
-# Audit only, fail the build on High or Critical (default threshold)
-sentinel --engine audit ./infra
-
-# Stricter gate, machine-readable stdout
-sentinel --fail-on medium --format json > findings.json
-
-# Write all three report formats to a directory
-sentinel --report json --report sarif --report html --output-dir sentinel-report
+```sh
+sentinel                          # audit ./ and triage this host
+sentinel --engine audit ./infra   # audit only
+sentinel -i                       # interactive view
+sentinel --fail-on medium         # stricter gate
+sentinel -f json | jq '.findings[] | select(.severity == "critical")'
+sentinel --engine host --host-root /mnt/image   # offline triage of a mounted Linux disk
 ```
 
-### Exit-code matrix
+Reports go to `sentinel-report/` by default (`sentinel.json`, `sentinel.sarif`, `sentinel.html`). Use `-r` to choose formats and `-o` to change the directory.
+
+<details>
+<summary><code>sentinel --help</code></summary>
+
+```
+Usage: sentinel [OPTION]... [PATH]...
+Triage the local host and audit each PATH (default ".") for security issues.
+
+Options:
+  -c, --config FILE                  load configuration from FILE
+  -e, --engine strings               engines to run: host, audit, all (repeatable)
+      --fail-on SEVERITY             exit 1 on findings at or above SEVERITY (info|low|medium|high|critical)
+      --min-coverage RATIO           exit 4 when collector coverage is below RATIO (0-1)
+  -t, --timeout duration             global time budget for the run (default 10s)
+      --collector-timeout duration   per-collector time limit (default: --timeout)
+  -j, --jobs int                     collectors to run in parallel (default: CPU count)
+  -o, --output-dir DIR               write reports into DIR (default sentinel-report)
+  -r, --report strings               report formats: json, sarif, html, none (repeatable)
+      --sarif-include-host           include host-engine findings in the SARIF file
+  -f, --format string                stdout format: summary, json, none (default "summary")
+      --host-root DIR                audit a mounted Linux filesystem at DIR instead of the live host
+      --max-file-bytes N             skip audited files larger than N bytes
+      --log-level string             diagnostic log level: debug, info, warn, error (default "warn")
+      --log-format string            diagnostic log format on stderr: auto, text, json (default "auto")
+  -q, --quiet                        suppress progress and summary output
+      --color string                 colorize output: auto, always, never (auto honours NO_COLOR) (default "auto")
+      --no-color                     same as --color=never
+  -i, --tui                          interactive full-screen view (requires a terminal)
+      --print-config                 print the effective configuration and exit
+  -V, --version                      print version information and exit
+  -h, --help                         show this help and exit
+```
+
+</details>
+
+### Interactive view
+
+`sentinel -i` opens a full-screen view with the same layout. Keys: `↑`/`↓` or `j`/`k` to move, `,` and `.` to change the sort column, `/` to reverse it, `f` to cycle the severity filter, `q` to quit. Quitting before the scan finishes cancels it and still writes a partial report.
+
+### Exit codes
 
 | Code | Meaning |
 |-----:|---------|
-| `0` | No findings at or above `--fail-on` |
-| `1` | Findings at or above `--fail-on` (default `high`) |
-| `2` | Usage, configuration, or rules error |
-| `3` | Runtime failure: nothing observed, or a report could not be written |
-| `4` | Coverage below `--min-coverage` (opt-in) |
-| `130` | Interrupted (SIGINT) — a partial report is still written |
+| 0 | No findings at or above `--fail-on` (default `high`) |
+| 1 | Findings at or above `--fail-on` |
+| 2 | Invalid flags, configuration, or host root |
+| 3 | Nothing was observed, or a report could not be written |
+| 4 | Coverage below `--min-coverage` (opt-in) |
+| 130 | Interrupted. A partial report marked `interrupted` is still written |
 
-### GitHub Actions
+A run that observes nothing exits 3, not 0, so a misconfigured scanner cannot pass a gate.
+
+## CI
+
+GitHub Actions with code scanning:
 
 ```yaml
-- name: SentinelTriage audit
-  run: sentinel --engine audit --report sarif --output-dir sentinel-report .
-- name: Upload SARIF
+- run: go install github.com/codext4fn-afk/sentineltriage/cmd/sentinel@latest
+- run: sentinel --engine audit -r sarif -o sentinel-report .
+- uses: github/codeql-action/upload-sarif@v3
   if: always()
-  uses: github/codeql-action/upload-sarif@v3
   with:
     sarif_file: sentinel-report/sentinel.sarif
 ```
 
----
+SARIF results carry `security-severity` scores, so GitHub ranks them as critical, high, medium, or low. Host findings are left out of SARIF unless `--sarif-include-host` is set, since code scanning is organized around repository files.
 
-## What it checks
+## Checks
 
-### DevSecOps audit (cross-platform)
+### Audit engine
 
-| Analyzer | Examples | ATT&CK |
-|---|---|---|
-| Dockerfile drift | unpinned base image, `ADD` from URL, `curl \| sh`, final stage runs as root | T1059.004, T1611 |
-| Kubernetes drift | `privileged`, `hostPID/Network/IPC`, `runAsNonRoot` unset, dangerous capabilities | T1611 |
-| Security headers | missing CSP, HSTS, `X-Content-Type-Options`, frame protection, `Referrer-Policy` | — |
+| Rule | Severity | Detects | ATT&CK |
+|---|---|---|---|
+| `drift.dockerfile.unpinned-base` | medium | `FROM` with no tag or the `latest` tag (digest-pinned images pass) | |
+| `drift.dockerfile.add-url` | medium | `ADD` from a remote URL | |
+| `drift.dockerfile.remote-exec` | medium | `curl`/`wget` piped into a shell | T1059.004 |
+| `drift.dockerfile.root-user` | high | Final stage has no non-root `USER` | T1611 |
+| `drift.k8s.privileged` | critical | `privileged: true` | T1611 |
+| `drift.k8s.host-pid` / `host-network` / `host-ipc` | high | Pod shares a host namespace | T1611 |
+| `drift.k8s.dangerous-capability` | high | Adds `SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE`, `ALL`, ... | T1611 |
+| `drift.k8s.run-as-root` | medium | `runAsNonRoot` unset and no non-zero `runAsUser` | |
+| `drift.k8s.privilege-escalation` | medium | `allowPrivilegeEscalation` unset or true | |
+| `headers.missing-csp` | high | No `Content-Security-Policy` | |
+| `headers.missing-hsts` | high | No `Strict-Transport-Security` | |
+| `headers.missing-nosniff` | medium | No `X-Content-Type-Options` | |
+| `headers.missing-frame-options` | medium | No `X-Frame-Options` or CSP `frame-ancestors` | |
+| `headers.missing-referrer-policy` | low | No `Referrer-Policy` | |
 
-### Host triage (Linux; other platforms report an explicit coverage gap)
+Kubernetes checks cover Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, and ReplicationController, including multi-document files. Header checks run on Netlify `_headers` and `netlify.toml`, `vercel.json`, and on nginx and Apache configuration and `.htaccess` files that already set response headers.
 
-| Analyzer | Examples | ATT&CK |
-|---|---|---|
-| `ld.so.preload` | a library injected into every process | T1574.006 |
-| cron | world-writable cron files; jobs executing from `/tmp`, `/dev/shm`, `/var/tmp` | T1053.003 |
-| systemd | world-writable units; `ExecStart` from staging paths; timers | T1543.002, T1053.006 |
+### Host engine: Windows
 
-ATT&CK technique IDs are validated at runtime against a curated table (`internal/attack`) pinned to a specific ATT&CK release, which is stamped into every report. A finding citing an unknown ID is rejected rather than published.
+| Rule | Severity | Detects | ATT&CK |
+|---|---|---|---|
+| `host.persistence.run-key-suspicious` | medium/high | Run or RunOnce value that runs encoded or hidden PowerShell, mshta, a regsvr32 scriptlet, rundll32 script, or a binary in a user-writable directory | T1547.001 |
+| `host.persistence.winlogon-modified` | high | `Userinit` or `Shell` launches anything besides `userinit.exe` / `explorer.exe` | T1547.004 |
+| `host.persistence.startup-file` | medium | Script or executable in a Startup folder instead of a shortcut | T1547.001 |
+| `host.persistence.service-suspicious` | high | Service `ImagePath` matches the patterns above | T1543.003 |
+| `host.persistence.service-unquoted-path` | medium | Unquoted `ImagePath` with spaces | T1574.009 |
+| `host.persistence.task-suspicious` | medium/high | Scheduled task action matches the patterns above | T1053.005 |
 
----
+Run keys are read from HKLM, HKCU, and the WOW6432Node view. Reading `System32\Tasks` requires administrator rights; without them it is reported as a `permission_denied` gap and the other locations are still checked.
 
-## Self-evaluation matrix
+### Host engine: Linux
 
-Scored 1–5 per criterion. `v0` is the honest first-draft design; `v1` is what shipped, after the hardening changes described in the project history.
+| Rule | Severity | Detects | ATT&CK |
+|---|---|---|---|
+| `host.persistence.ld-preload` | high | Entries in `/etc/ld.so.preload` | T1574.006 |
+| `host.persistence.cron-temp-exec` | medium | Cron job runs from `/tmp`, `/var/tmp`, or `/dev/shm` | T1053.003 |
+| `host.persistence.cron-writable` | medium | Cron file writable by group or others | T1053.003 |
+| `host.persistence.unit-temp-exec` | medium | systemd `Exec*` from a temp directory | T1543.002, T1053.006 |
+| `host.persistence.unit-writable` | medium | systemd unit or timer writable by group or others | T1543.002, T1053.006 |
 
-| # | Criterion | v0 | v1 | Key change |
-|---|---|:-:|:-:|---|
-| 1 | Static/dynamic typing consistency | 4 | 5 | Severity, confidence, status, engine, exit code are typed enums with text (un)marshalers |
-| 2 | Memory footprint | 3 | 4 | Per-file size cap + truncation; bounded worker queue; per-collector finding cap |
-| 3 | Concurrency safety | 4 | 5 | Single-owner aggregator; per-collector buffered sink; `-race` in CI; deep-copy on emit |
-| 4 | Error isolation | 3 | 5 | Per-collector `recover()` + deadline; abandon (not await) uncooperative goroutines |
-| 5 | ATT&CK mapping accuracy | 3 | 4 | Central validated table, release-pinned; parent-fallback policy; confidence on every finding |
-| 6 | SARIF compliance | 3 | 5 | Typed 2.1.0 model; validated against the **official schema** in tests; `security-severity`, fingerprints, `uriBaseId` |
-| 7 | CI exit codes | 3 | 5 | Six distinct codes; findings never conflated with runtime failure |
-| 8 | Regex/entropy performance | 3 | 4 | Analyzer `Applies` pre-filter; linear-time Go regex; parallel file workers |
-| 9 | False-positive mitigation | 3 | 4 | Header checks only on files that set headers; K8s ignores non-manifest YAML; `frame-ancestors` satisfies frame-options |
-| 10 | Dependency minimization | 2 | 4 | 2 runtime deps in the default build; TUI + its tree behind `-tags tui` |
-| 11 | Config decoupling | 4 | 5 | Strict YAML (`KnownFields`); no implicit config discovery from the scanned tree |
-| 12 | Log routing | 2 | 5 | `slog` to stderr; stdout carries report only; verified by test |
-| 13 | Cross-platform portability | 2 | 4 | Audit engine fully portable; host engine build-tagged with an unsupported stub elsewhere |
-| 14 | POSIX flags | 4 | 5 | `pflag`: bundling, `--` terminator, `NO_COLOR`, stdout/stderr separation |
-| 15 | Signal handling | 2 | 5 | `NotifyContext`; partial report flagged `interrupted`; second Ctrl+C forces exit; atomic writes |
-| 16 | Extensibility | 3 | 4 | Two-method `Analyzer` and `Collector` interfaces; shared finding builder |
-| 17 | Low-privilege behavior | 3 | 4 | Permission → coverage gap; ENOENT treated as a benign race, not a gap |
-| 18 | Documentation | 3 | 4 | Mermaid data-flow, concurrency, and exit-code diagrams; this matrix |
-| 19 | Testability | 4 | 5 | `fs.FS`-injected host root; `testing/synctest` for deterministic timeouts; schema-validated SARIF |
-| 20 | Self-contained HTML | 4 | 5 | Inlined assets; hash-pinned CSP `default-src 'none'`; DOM built via `textContent`, never `innerHTML` |
-| | **Total** | **60** | **91** | |
+ATT&CK IDs are validated at runtime against a table pinned to ATT&CK Enterprise v18. A finding that cites an unknown ID is rejected.
 
-### Honest caveats
+## Coverage
 
-- **v1 scores are a design self-assessment, not an external audit.** They are the project's own rubric.
-- The **host engine is Linux-only.** Windows and macOS persistence collectors are on the roadmap; today they report an explicit `unsupported` coverage gap.
-- The **race detector runs in CI**, not in every local build (it needs a C toolchain).
-- The schema-validator test dependency (`santhosh-tekuri/jsonschema`) pulls in `golang.org/x/text`; it is **test-only** and not linked into any binary.
+Each collector reports a status (`ok`, `degraded`, `timeout`, `failed`, `unsupported`, ...) and the locations it could not read. Coverage is the weighted share of collectors that completed: `ok` counts 1, `degraded` 0.5, anything else 0, and `unsupported` is excluded. An empty result is only meaningful next to that list, so both appear in every output format. `--min-coverage` turns low coverage into exit code 4.
 
----
+## Configuration
 
-## Dependencies
+```yaml
+version: 1
+budget: 10s
+fail_on: high
+engines:
+  audit:
+    paths: ["."]
+    exclude: ["**/*.min.js", "testdata"]
+output:
+  dir: sentinel-report
+  formats: [json, sarif, html]
+```
 
-| Module | Scope | Why |
-|---|---|---|
-| `github.com/spf13/pflag` | runtime | POSIX/GNU flags |
-| `go.yaml.in/yaml/v3` | runtime | Kubernetes/Compose parsing |
-| `github.com/charmbracelet/bubbletea`, `lipgloss` | runtime, `-tags tui` only | interactive live view |
-| `github.com/santhosh-tekuri/jsonschema/v6` | **test only** | validates SARIF against the official 2.1.0 schema |
+The full schema is in [`sentinel.example.yaml`](sentinel.example.yaml). Configuration is loaded only from `--config`. It is never picked up from the scanned directory, because a repository under audit could otherwise ship a file that disables its own checks. Unknown keys are an error.
 
----
+## Benchmarks
+
+| Workload | Files in tree | Files opened | Median wall time | Peak RSS |
+|---|---:|---:|---:|---:|
+| `--engine audit` on the Go 1.27.0 install directory | 15,636 | 67 | 175 ms | 16 MB |
+| `--engine host` on Windows 11 | n/a | n/a | 31 ms | n/a |
+
+AMD Ryzen 5 5600X (12 threads), Windows 11 Pro, Go 1.27.0. Median of five runs with a warm file cache, measured end to end including process startup.
+
+Analyzers decide from the path whether they want a file, so files no analyzer handles are never opened. The first 8 KiB of a selected file are checked for NUL bytes before the rest is read.
+
+## Design
+
+See [docs/architecture.md](docs/architecture.md) for scheduling, failure isolation, fingerprinting, and the HTML report's security model. In short:
+
+- Every collector runs in its own goroutine behind `recover()` and a deadline. A collector that ignores cancellation is abandoned at the deadline and its partial output kept.
+- Findings are copied and validated at the engine boundary, then sorted and de-duplicated by a line-independent fingerprint, so ordering is stable and a finding keeps its identity when code above it moves.
+- Reports are written to a temp file and renamed, with mode `0600`.
+- The HTML report makes no network requests. Finding data is rendered with `textContent`, and the script and stylesheet are pinned by hash in a `default-src 'none'` CSP.
+
+## Limitations
+
+- Secret scanning is out of scope. Run [gitleaks](https://github.com/gitleaks/gitleaks) or [trufflehog](https://github.com/trufflesecurity/trufflehog) as a separate step and upload both SARIF files.
+- The host engine has no macOS collector yet. On macOS it reports an `unsupported` gap.
+- Windows Startup folders are read for the current user and all users, not for every profile on the machine.
+- Header checks are static. They cannot see headers added by a CDN, load balancer, or application code.
 
 ## Development
 
-```bash
-go test ./...                 # unit tests
-go test -race -count=1 ./...   # with the race detector (needs cgo)
-go test -tags tui ./internal/ui/
+```sh
+go test ./...
+go test -race ./...    # requires cgo
 go vet ./...
-gofmt -l .
 ```
 
-### Layout
-
-```
-cmd/sentinel         entry point: signals, exit code
-internal/engine      orchestration, failure boundary, aggregator, coverage
-internal/finding     immutable finding model, severity/confidence, redaction, fingerprints
-internal/attack      curated, validated MITRE ATT&CK table
-internal/config      strict YAML config loader
-internal/cli         flags, exit-code matrix, report wiring, logging
-internal/audit       walker + analyzers (dockerfile, kubernetes, headers) + collector
-internal/host/…      host persistence collector (Linux build-tagged)
-internal/report/…    json, sarif, html writers + atomic file writer
-internal/ui          plain renderer; Bubble Tea TUI behind -tags tui
-```
-
----
+CI runs tests with the race detector on Linux, macOS, and Windows, plus `govulncheck` and a cross-compile matrix.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)

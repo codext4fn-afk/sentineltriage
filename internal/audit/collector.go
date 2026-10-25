@@ -49,7 +49,19 @@ func New(cfg Config) *Collector {
 		w = runtime.GOMAXPROCS(0)
 	}
 	return &Collector{
-		opts:      walker.Options{Roots: cfg.Roots, MaxFileBytes: cfg.MaxFileBytes, Exclude: cfg.Exclude},
+		opts: walker.Options{
+			Roots:        cfg.Roots,
+			MaxFileBytes: cfg.MaxFileBytes,
+			Exclude:      cfg.Exclude,
+			Select: func(rel string) bool {
+				for _, an := range a {
+					if an.Applies(rel) {
+						return true
+					}
+				}
+				return false
+			},
+		},
 		analyzers: a,
 		workers:   w,
 	}
@@ -107,7 +119,7 @@ func (c *Collector) Run(ctx context.Context, sink engine.Sink) error {
 
 func (c *Collector) analyze(f walker.File, sink engine.Sink) {
 	for _, a := range c.analyzers {
-		if a.Applies(f) {
+		if a.Applies(f.Rel) {
 			a.Analyze(f, sink.Emit)
 		}
 	}

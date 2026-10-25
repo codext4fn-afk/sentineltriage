@@ -56,6 +56,12 @@ type Options struct {
 	// relative to its root (e.g. "node_modules", "**/*.min.js"). Matching
 	// directories are pruned, which is what keeps vendor trees cheap.
 	Exclude []string
+	// Select, if set, is consulted with the scan-relative path of each regular
+	// file before it is opened. Files it rejects are never read; they are out
+	// of scope rather than skipped, so they are not reported as Skips. Opening
+	// is the expensive part of a scan on Windows, where antivirus filters
+	// inspect every open, so this is the main lever on cold-cache runtime.
+	Select func(rel string) bool
 }
 
 // defaultExcludes are pruned even when Options.Exclude is empty: these trees
@@ -117,6 +123,9 @@ func Walk(ctx context.Context, opts Options, fn func(File) error) (*Result, erro
 			if d.IsDir() || !d.Type().IsRegular() {
 				return nil
 			}
+			if opts.Select != nil && !opts.Select(rel) {
+				return nil
+			}
 			f, skip, readErr := read(p, rel, opts.MaxFileBytes)
 			switch {
 			case readErr != nil:
@@ -151,21 +160,26 @@ func read(abs, rel string, max int64) (File, *Skip, error) {
 		return File{}, &Skip{Rel: rel, Reason: "not a regular file"}, nil
 	}
 
+	// The head is sniffed before the rest is read so a binary that slipped
+	// past Select costs one small read, not max bytes.
+	head := make([]byte, min(int64(sniffBytes), max+1))
+	n, err := io.ReadFull(fh, head)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return File{}, &Skip{Rel: rel, Reason: "read: " + err.Error()}, nil
+	}
+	head = head[:n]
+	if bytes.IndexByte(head, 0) >= 0 {
+		return File{}, &Skip{Rel: rel, Reason: "binary"}, nil
+	}
 	// One extra byte is read past the cap purely to detect truncation.
-	buf, err := io.ReadAll(io.LimitReader(fh, max+1))
+	rest, err := io.ReadAll(io.LimitReader(fh, max+1-int64(n)))
 	if err != nil {
 		return File{}, &Skip{Rel: rel, Reason: "read: " + err.Error()}, nil
 	}
+	buf := append(head, rest...)
 	truncated := int64(len(buf)) > max
 	if truncated {
 		buf = buf[:max]
-	}
-	sniff := buf
-	if len(sniff) > sniffBytes {
-		sniff = sniff[:sniffBytes]
-	}
-	if bytes.IndexByte(sniff, 0) >= 0 {
-		return File{}, &Skip{Rel: rel, Reason: "binary"}, nil
 	}
 	return File{Rel: rel, Abs: abs, Size: st.Size(), Truncated: truncated, Content: buf}, nil, nil
 }

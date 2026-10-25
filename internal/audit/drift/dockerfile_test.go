@@ -9,11 +9,11 @@ import (
 )
 
 func analyze(a interface {
-	Applies(walker.File) bool
+	Applies(string) bool
 	Analyze(walker.File, func(finding.Finding))
 }, rel, body string) []finding.Finding {
 	f := walker.File{Rel: rel, Content: []byte(body)}
-	if !a.Applies(f) {
+	if !a.Applies(f.Rel) {
 		return nil
 	}
 	var out []finding.Finding
@@ -42,12 +42,12 @@ func has(fs []finding.Finding, rule string) *finding.Finding {
 func TestDockerfileApplies(t *testing.T) {
 	d := Dockerfile{}
 	for _, name := range []string{"Dockerfile", "api.Dockerfile", "Dockerfile.ci", "Containerfile"} {
-		if !d.Applies(walker.File{Rel: name}) {
+		if !d.Applies(name) {
 			t.Errorf("%s should apply", name)
 		}
 	}
 	for _, name := range []string{"dockerfile.md", "notes.txt", "k8s.yaml"} {
-		if d.Applies(walker.File{Rel: name}) {
+		if d.Applies(name) {
 			t.Errorf("%s should not apply", name)
 		}
 	}

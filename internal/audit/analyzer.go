@@ -19,8 +19,9 @@ import (
 // on parallel workers. Analyze must not retain f.Content after returning.
 type Analyzer interface {
 	Name() string
-	// Applies is a cheap pre-filter on path and size so the collector can skip
-	// irrelevant files without entering Analyze.
-	Applies(f walker.File) bool
+	// Applies decides from the scan-relative path alone whether the analyzer
+	// wants a file. It runs before the file is opened, which is what keeps a
+	// scan of a large tree from reading thousands of irrelevant files.
+	Applies(rel string) bool
 	Analyze(f walker.File, emit func(finding.Finding))
 }

@@ -11,7 +11,7 @@ import (
 func run(rel, body string) []finding.Finding {
 	a := Analyzer{}
 	f := walker.File{Rel: rel, Content: []byte(body)}
-	if !a.Applies(f) {
+	if !a.Applies(f.Rel) {
 		return nil
 	}
 	var out []finding.Finding

@@ -28,8 +28,8 @@ var workloadKinds = map[string]bool{
 
 // Applies matches .yaml/.yml files. Content is confirmed to be a Kubernetes
 // object inside Analyze, since YAML is used for much more than manifests.
-func (Kubernetes) Applies(f walker.File) bool {
-	ext := strings.ToLower(path.Ext(f.Rel))
+func (Kubernetes) Applies(rel string) bool {
+	ext := strings.ToLower(path.Ext(rel))
 	return ext == ".yaml" || ext == ".yml"
 }
 

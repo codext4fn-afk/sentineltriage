@@ -1,12 +1,13 @@
-// Package html renders a single, dependency-free HTML triage dashboard.
+// Package html renders a single, dependency-free HTML report that mirrors the
+// terminal dashboard.
 //
 // Security model: the report embeds attacker-influenced strings (file paths,
-// matched snippets, process command lines), so it is defended in depth.
-// Finding data is carried in a non-executable application/json block, already
-// HTML-escaped by the JSON encoder, and parsed by a static script. A strict
-// Content-Security-Policy pins that script and the stylesheet by SHA-256 hash
-// and forbids all network origins, so even a string that defeats escaping
-// cannot exfiltrate or execute.
+// matched snippets, command lines), so it is defended in depth. Finding data
+// is carried in a non-executable application/json block, already HTML-escaped
+// by the JSON encoder, and parsed by a static script that builds the DOM with
+// textContent only. A strict Content-Security-Policy pins that script and the
+// stylesheet by SHA-256 and forbids every network origin, so even a string
+// that defeats escaping cannot execute or exfiltrate.
 package html
 
 import (
@@ -17,34 +18,45 @@ import (
 	"io"
 	"strings"
 
+	"github.com/codext4fn-afk/sentineltriage/internal/attack"
 	"github.com/codext4fn-afk/sentineltriage/internal/engine"
 	"github.com/codext4fn-afk/sentineltriage/internal/report/jsonout"
 )
 
-// Write renders the dashboard for r into w.
+// Write renders the report for r into w.
 func Write(w io.Writer, r *engine.Result, m jsonout.Meta) error {
-	doc := jsonout.Build(r, m)
+	// Technique names travel with the data so the page needs no lookup table
+	// of its own; only IDs that appear in this run are included.
+	names := map[string]string{}
+	for _, f := range r.Findings {
+		for _, id := range f.Techniques {
+			if t, ok := attack.Lookup(id); ok {
+				names[id] = t.Name
+			}
+		}
+	}
+	payload := struct {
+		Report     jsonout.Document  `json:"report"`
+		Techniques map[string]string `json:"techniques"`
+	}{jsonout.Build(r, m), names}
 	// Default HTML escaping turns <, >, & into < etc., so the payload
 	// contains no literal "<" and cannot terminate the <script> element.
-	data, err := json.Marshal(doc)
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 
 	csp := strings.Join([]string{
 		"default-src 'none'",
-		"img-src data:",
-		"style-src 'sha256-" + sriHash(styleCSS) + "'",
-		"script-src 'sha256-" + sriHash(appJS) + "'",
+		"style-src 'sha256-" + cspHash(styleCSS) + "'",
+		"script-src 'sha256-" + cspHash(appJS) + "'",
 		"base-uri 'none'",
 		"form-action 'none'",
 	}, "; ")
 
-	// The CSP is emitted as a complete, trusted <meta> tag so its single
-	// quotes are not entity-escaped by attribute-context escaping. This is
-	// safe because the value is built only from fixed directives and base64
-	// hashes (chars [A-Za-z0-9+/=]); it contains no HTML-significant byte and
-	// no user-controlled data.
+	// Emitted as a complete trusted tag so the single quotes are not entity-
+	// escaped by attribute-context escaping. Safe because the value is built
+	// only from fixed directives and base64 hashes, with no user data.
 	metaTag := template.HTML(`<meta http-equiv="Content-Security-Policy" content="` + csp + `">`)
 
 	return page.Execute(w, pageData{
@@ -62,10 +74,10 @@ type pageData struct {
 	Data    template.JS
 }
 
-// sriHash returns the base64 SHA-256 of s for a CSP hash source. It must be
-// computed over the exact bytes emitted; html/template renders template.CSS
-// and template.JS values verbatim, so the hashes stay valid.
-func sriHash(s string) string {
+// cspHash returns the base64 SHA-256 of s for a CSP hash source. It must match
+// the exact emitted bytes; html/template renders template.CSS and template.JS
+// verbatim, so it does.
+func cspHash(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
@@ -76,11 +88,11 @@ var page = template.Must(template.New("report").Parse(`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{.CSPMeta}}
-<title>SentinelTriage Report</title>
+<title>sentinel report</title>
 <style>{{.Style}}</style>
 </head>
 <body>
-<main id="app" class="loading">Rendering report…</main>
+<main id="app">loading report...</main>
 <script id="data" type="application/json">{{.Data}}</script>
 <script>{{.Script}}</script>
 </body>
@@ -88,121 +100,182 @@ var page = template.Must(template.New("report").Parse(`<!doctype html>
 `))
 
 const styleCSS = `
-:root{color-scheme:light dark;--bg:#0b0e14;--panel:#141a24;--fg:#e6edf3;--muted:#8b949e;--line:#263040;
---crit:#ff5c6c;--high:#ff8c42;--med:#ffd166;--low:#4aa3ff;--info:#8b949e;--ok:#3fb950}
+:root{--bg:#1d1f21;--fg:#c5c8c6;--hi:#e0e0e0;--mute:#969896;--line:#7c7f84;--head:#4d5057;
+--crit:#cc6666;--high:#de935f;--med:#f0c674;--low:#81a2be;--info:#969896;--ok:#b5bd68;--teal:#8abeb7;--sel:#c397d8}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-main{max-width:1100px;margin:0 auto;padding:32px 20px}
-h1{font-size:22px;margin:0 0 4px}
-.sub{color:var(--muted);margin:0 0 24px}
-.tiles{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px}
-.tile{flex:1;min-width:110px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-.tile .n{font-size:26px;font-weight:700}
-.tile .l{color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:.06em}
-.tile.crit .n{color:var(--crit)}.tile.high .n{color:var(--high)}.tile.med .n{color:var(--med)}
-.tile.low .n{color:var(--low)}.tile.info .n{color:var(--info)}
-.bar{height:8px;border-radius:6px;overflow:hidden;display:flex;background:var(--line);margin-bottom:24px}
-.bar>span{display:block}
-.meta{display:flex;flex-wrap:wrap;gap:16px;color:var(--muted);margin-bottom:24px;font-size:13px}
-.meta b{color:var(--fg);font-weight:600}
-.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-.filters button{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:999px;padding:5px 12px;cursor:pointer;font:inherit}
-.filters button[aria-pressed=true]{border-color:var(--low);color:var(--low)}
-table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
-tr:last-child td{border-bottom:none}
-.sev{font-weight:700;font-size:12px;text-transform:uppercase;white-space:nowrap}
-.sev.critical{color:var(--crit)}.sev.high{color:var(--high)}.sev.medium{color:var(--med)}
-.sev.low{color:var(--low)}.sev.info{color:var(--info)}
-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--fg);word-break:break-all}
-.loc{color:var(--muted);font-size:12px}
-.tech{display:inline-block;background:var(--line);border-radius:4px;padding:1px 6px;font-size:11px;margin:1px 2px 0 0}
-.rem{color:var(--muted);font-size:12px;margin-top:4px}
-.empty{padding:40px;text-align:center;color:var(--ok);font-size:16px}
-.warn{background:#3a2a12;border:1px solid var(--high);color:var(--med);padding:10px 14px;border-radius:8px;margin-bottom:16px}
-footer{color:var(--muted);font-size:12px;margin-top:24px;text-align:center}
+html,body{margin:0;background:var(--bg);color:var(--fg)}
+body{font:13px/1.45 ui-monospace,"Cascadia Mono","JetBrains Mono",SFMono-Regular,Menlo,Consolas,monospace}
+main{padding:10px 14px;max-width:1500px}
+.bar{white-space:pre-wrap;margin-bottom:6px}
+.bar b{color:var(--hi)}
+.m{color:var(--mute)}.hi{color:var(--hi)}.t{color:var(--teal)}.y{color:var(--med)}.ok{color:var(--ok)}
+.crit{color:var(--crit);font-weight:bold}.high{color:var(--high)}.medium{color:var(--med)}.low{color:var(--low)}.info{color:var(--info)}
+fieldset{border:1px solid var(--line);margin:0 0 6px;padding:2px 8px 6px;min-width:0}
+fieldset.active{border-color:var(--crit)}
+legend{padding:0 2px;color:var(--hi)}
+legend span{color:var(--mute)}
+.row{display:flex;gap:6px;flex-wrap:wrap}
+.row>fieldset{flex:1 1 300px}
+.row>fieldset.sev{flex:0 0 230px}
+.vbars{display:flex;gap:10px;align-items:flex-end;height:78px;padding-top:6px}
+.vcol{width:30px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+.vcol i{display:block;width:24px;min-height:0}
+.vlab{display:flex;gap:10px}.vlab span{width:30px;text-align:center}
+.hrow{display:grid;grid-template-columns:minmax(0,1fr) 40% 3ch;gap:8px;align-items:center}
+.hrow .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.hrow i{display:block;height:11px}
+.hrow .n,.num{text-align:right;color:var(--hi)}
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+th{background:var(--head);color:#fff;font-weight:bold;text-align:left;padding:1px 6px;white-space:nowrap;cursor:default}
+th.sort{cursor:pointer;user-select:none}
+td{padding:1px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
+tr.f{cursor:pointer}
+tr.f.sel td,tr.f.sel td *{color:var(--sel);font-weight:bold}
+.keys{color:var(--mute)}
+.keys button{font:inherit;color:var(--mute);background:none;border:0;padding:0;cursor:pointer}
+.keys button.on{color:var(--med)}
+.detail div{white-space:pre-wrap}
+.detail .k{display:inline-block;width:9ch;color:var(--mute)}
+.warn{color:var(--med)}
+.foot{margin-top:4px}
 `
 
-// appJS reads the embedded JSON and builds the DOM entirely via createElement /
-// textContent. It never uses innerHTML with report data, which keeps untrusted
-// strings out of any HTML-parsing path even before the CSP applies.
+// appJS mirrors the terminal dashboard. It builds the DOM exclusively through
+// createElement and textContent; report data never reaches an HTML parser.
 const appJS = `
 (function(){
-  "use strict";
-  var SEV=["critical","high","medium","low","info"];
-  var data;
-  try{ data=JSON.parse(document.getElementById("data").textContent); }
-  catch(e){ document.getElementById("app").textContent="Failed to parse report data."; return; }
-  var app=document.getElementById("app"); app.className=""; app.textContent="";
-  function el(tag,cls,txt){var n=document.createElement(tag);if(cls)n.className=cls;if(txt!=null)n.textContent=txt;return n;}
-  function pct(n,t){return t>0?(100*n/t).toFixed(0):0;}
+"use strict";
+var SEV=["critical","high","medium","low","info"],SHORT={critical:"CRIT",high:"HIGH",medium:"MED",low:"LOW",info:"INFO"};
+var RANK={info:0,low:1,medium:2,high:3,critical:4};
+var data,NAMES;
+try{var P=JSON.parse(document.getElementById("data").textContent);data=P.report;NAMES=P.techniques||{};}
+catch(e){document.getElementById("app").textContent="report data is unreadable";return;}
+var app=document.getElementById("app");app.textContent="";
+function el(tag,cls,txt){var n=document.createElement(tag);if(cls)n.className=cls;if(txt!=null)n.textContent=String(txt);return n;}
+function add(p){for(var i=1;i<arguments.length;i++)p.appendChild(arguments[i]);return p;}
+function panel(title,count,cls){var f=el("fieldset",cls),l=el("legend",null,title);if(count!=null)l.appendChild(el("span",null," ["+count+"]"));f.appendChild(l);return f;}
+function loc(L){L=L||{};if(L.path)return L.path+(L.start_line?":"+L.start_line:(L.artifact?" "+L.artifact:""));if(L.pid)return "pid "+L.pid;return L.artifact||"";}
+function dur(ms){return ms<1000?ms+"ms":(ms/1000).toFixed(2)+"s";}
 
-  var sum=data.summary||{by_severity:{}}, run=data.run||{}, counts=sum.by_severity||{}, total=sum.total||0;
+var run=data.run||{},sum=data.summary||{},tool=data.tool||{},F=data.findings||[],C=data.collectors||[];
+var counts=sum.by_severity||{},total=F.length,cov=Math.round((run.coverage||0)*100);
 
-  app.appendChild(el("h1","","SentinelTriage Report"));
-  app.appendChild(el("p","sub",(data.tool?data.tool.name+" "+data.tool.version:"")+" · ATT&CK "+(data.tool?data.tool.attack_version:"")));
+var bar=el("div","bar");
+add(bar,el("b",null,"sentinel"),el("span","m"," "+(tool.version||"")));
+function field(t,c){add(bar,el("span","m"," ["),el("span",c||"hi",t),el("span","m","]"));}
+field((run.os||"")+"/"+(run.arch||""));if(run.hostname)field(run.hostname);
+field(total+" findings");field("coverage "+cov+"%",cov<100?"y":"ok");field(dur(run.duration_ms||0));field("fail-on "+(sum.fail_on||""));
+field("ATT&CK "+(tool.attack_version||""),"m");
+app.appendChild(bar);
+if(run.interrupted||run.budget_exceeded)app.appendChild(el("div","warn",run.interrupted?"run interrupted: results are partial":"time budget exhausted: results are partial"));
 
-  if(run.interrupted||run.budget_exceeded){
-    app.appendChild(el("div","warn",run.interrupted?"Run interrupted — results are partial.":"Time budget exhausted — results are partial."));
-  }
+var row=el("div","row");app.appendChild(row);
+var sp=panel("Severity",total,"sev"),vb=el("div","vbars"),vl=el("div","vlab"),peak=1;
+SEV.forEach(function(s){peak=Math.max(peak,counts[s]||0);});
+SEV.forEach(function(s){
+  var c=el("div","vcol"),b=el("i");b.style.height=((counts[s]||0)/peak*100)+"%";b.style.background="var(--"+(s==="critical"?"crit":s==="medium"?"med":s)+")";
+  add(c,b);vb.appendChild(c);
+});
+var vn=el("div","vlab");SEV.forEach(function(s){vn.appendChild(el("span",s,counts[s]||0));});
+SEV.forEach(function(s){vl.appendChild(el("span","m",SHORT[s].toLowerCase()));});
+add(sp,vb,vn,vl);row.appendChild(sp);
 
-  var tiles=el("div","tiles");
-  SEV.forEach(function(s){
-    var t=el("div","tile "+s);
-    t.appendChild(el("div","n",String(counts[s]||0)));
-    t.appendChild(el("div","l",s));
-    tiles.appendChild(t);
+var byLoc={};F.forEach(function(f){var k=(f.location||{}).path||(f.location||{}).artifact||"";var a=byLoc[k]||(byLoc[k]={k:k,n:0,w:0});a.n++;a.w=Math.max(a.w,RANK[f.severity]);});
+var locs=Object.keys(byLoc).map(function(k){return byLoc[k];}).sort(function(a,b){return b.n-a.n||b.w-a.w||(a.k<b.k?-1:1);});
+var lp=panel("Locations",locs.length),lpeak=locs.length?locs[0].n:1;
+locs.slice(0,8).forEach(function(a){
+  var r=el("div","hrow"),i=el("i");i.style.width=(a.n/lpeak*100)+"%";var s=SEV[4-a.w];i.style.background="var(--"+(s==="critical"?"crit":s==="medium"?"med":s)+")";
+  var w=el("div");w.appendChild(i);add(r,el("span","name",a.k),w,el("span","n",a.n));lp.appendChild(r);
+});
+if(!locs.length)lp.appendChild(el("div","m","no findings"));
+row.appendChild(lp);
+
+var tc={};F.forEach(function(f){(f.attack_techniques||[]).forEach(function(t){tc[t]=(tc[t]||0)+1;});});
+var techs=Object.keys(tc).sort(function(a,b){return tc[b]-tc[a]||(a<b?-1:1);});
+var ap=panel("ATT&CK",techs.length+" techniques");
+techs.slice(0,8).forEach(function(t){
+  var r=el("div","hrow"),nm=(NAMES[t]||"").split(": ").pop();r.style.gridTemplateColumns="11ch minmax(0,1fr) 3ch";
+  var n=el("span","name",nm);n.style.direction="ltr";add(r,el("span","t",t),n,el("span","n",tc[t]));ap.appendChild(r);
+});
+if(!techs.length)ap.appendChild(el("div","m","no findings"));
+row.appendChild(ap);
+
+var cp=panel("Collectors",C.length),ct=el("table"),ch=el("tr");
+[["NAME","34%"],["STATUS","12%"],["TIME","8%"],["FINDINGS","9%"],["GAPS","6%"],["NOTE","31%"]].forEach(function(h){var th=el("th",null,h[0]);th.style.width=h[1];ch.appendChild(th);});
+ct.appendChild(ch);
+C.forEach(function(c){
+  var gaps=(c.degradations||[]).length+(c.dropped_degradations||0),note=c.error||((c.degradations||[])[0]?c.degradations[0].reason+" "+c.degradations[0].scope:"");
+  var st=c.status==="ok"?"ok":(c.status==="degraded"||c.status==="timeout"||c.status==="unsupported")?"y":"crit";
+  var tr=el("tr");add(tr,el("td",null,c.name),el("td",st,c.status),el("td","num",(c.duration_ms||0)+"ms"),el("td","num",c.findings||0),el("td","num m",gaps),el("td","m",note));ct.appendChild(tr);
+});
+cp.appendChild(ct);app.appendChild(cp);
+
+var COLS=[["SEV","7%",function(f){return RANK[f.severity];}],["RULE","24%",function(f){return f.rule_id;}],
+  ["LOCATION","22%",function(f){return loc(f.location);}],["ATT&CK","10%",function(f){return (f.attack_techniques||[]).join(",");}],
+  ["FINDING","37%",function(f){return f.title;}]];
+var state={col:0,asc:false,min:0,sel:0};
+var fp=panel("Findings",total,"active"),keys=el("span","keys"),fbtn=el("button");
+add(keys,document.createTextNode("  navigate [j/k]  sort [click header]  filter "),fbtn);
+fp.firstChild.appendChild(keys);
+var ft=el("table");add(fp,ft);app.appendChild(fp);
+var dp=panel("Detail",null,"detail");app.appendChild(dp);
+fbtn.addEventListener("click",function(){cycle();});
+
+function rows(){
+  var get=COLS[state.col][2];
+  return F.filter(function(f){return RANK[f.severity]>=state.min;}).sort(function(a,b){
+    var x=get(a),y=get(b),c=x<y?-1:x>y?1:0;return state.asc?c:-c;
   });
-  app.appendChild(tiles);
-
-  var bar=el("div","bar");
-  SEV.forEach(function(s){var w=pct(counts[s]||0,total);if(w>0){var seg=el("span");seg.style.width=w+"%";seg.style.background="var(--"+ (s==="critical"?"crit":s==="high"?"high":s==="medium"?"med":s==="low"?"low":"info") +")";bar.appendChild(seg);}});
-  if(total>0)app.appendChild(bar);
-
-  var meta=el("div","meta");
-  function m(label,val){var d=el("div");d.appendChild(el("b","",val));d.appendChild(document.createTextNode(" "+label));return d;}
-  meta.appendChild(m("findings",String(total)));
-  meta.appendChild(m("coverage",pct((run.coverage||0)*100,100)+"%"));
-  meta.appendChild(m("duration",(run.duration_ms||0)+" ms"));
-  meta.appendChild(m("host",(run.os||"")+"/"+(run.arch||"")));
-  meta.appendChild(m("gate",(sum.threshold_breached?"FAIL":"pass")+" (fail-on "+(sum.fail_on||"")+")"));
-  app.appendChild(meta);
-
-  var findings=(data.findings||[]).slice();
-  if(findings.length===0){app.appendChild(el("div","empty","No findings. Nothing at or above the configured threshold."));return;}
-
-  var active={}; SEV.forEach(function(s){active[s]=true;});
-  var filters=el("div","filters");
-  SEV.forEach(function(s){
-    if(!counts[s])return;
-    var b=el("button",null,s+" ("+counts[s]+")");b.setAttribute("aria-pressed","true");
-    b.addEventListener("click",function(){active[s]=!active[s];b.setAttribute("aria-pressed",active[s]?"true":"false");render();});
-    filters.appendChild(b);
+}
+function cycle(){state.min=(state.min+1)%5;state.sel=0;draw();}
+function draw(){
+  var R=rows();state.sel=Math.max(0,Math.min(state.sel,R.length-1));
+  fbtn.textContent="[f] "+(state.min?">= "+SEV[4-state.min]:"all");fbtn.className=state.min?"on":"";
+  fp.firstChild.firstChild.nextSibling.textContent=" ["+R.length+"]";
+  ft.textContent="";var hr=el("tr");
+  COLS.forEach(function(c,i){
+    var th=el("th","sort",(i===state.col?(state.asc?"↑":"↓"):"")+c[0]);th.style.width=c[1];
+    th.addEventListener("click",function(){if(state.col===i)state.asc=!state.asc;else{state.col=i;state.asc=i!==0;}draw();});
+    hr.appendChild(th);
   });
-  app.appendChild(filters);
+  ft.appendChild(hr);
+  R.forEach(function(f,i){
+    var tr=el("tr","f"+(i===state.sel?" sel":""));
+    add(tr,el("td",f.severity,SHORT[f.severity]),el("td",null,f.rule_id),el("td","m",loc(f.location)),
+      el("td","t",(f.attack_techniques||[]).join(",")),el("td",null,f.title));
+    tr.title=f.title;
+    tr.addEventListener("click",function(){state.sel=i;draw();});
+    ft.appendChild(tr);
+  });
+  if(!R.length){var tr=el("tr"),td=el("td","m",total?"nothing at this filter level":"no findings");td.colSpan=5;add(ft,add(tr,td));}
+  detail(R[state.sel]);
+}
+function line(k,v,c){var d=el("div");add(d,el("span","k",k),el("span",c||null,v));dp.appendChild(d);}
+function detail(f){
+  while(dp.childNodes.length>1)dp.removeChild(dp.lastChild);
+  if(!f){dp.appendChild(el("div","m","select a finding"));return;}
+  var h=el("div");add(h,el("span",f.severity,SHORT[f.severity]),el("b",null,"  "+f.rule_id),el("span","m","  confidence "+f.confidence));dp.appendChild(h);
+  dp.appendChild(el("div","hi",f.title));
+  line("where",loc(f.location));
+  if(f.description)line("why",f.description);
+  if(f.remediation)line("fix",f.remediation);
+  if((f.attack_techniques||[]).length)line("att&ck",f.attack_techniques.map(function(t){return NAMES[t]?t+" "+NAMES[t]:t;}).join("; "),"t");
+  Object.keys(f.evidence||{}).sort().forEach(function(k){line(k,f.evidence[k],"m");});
+}
+document.addEventListener("keydown",function(e){
+  var R=rows();
+  if(e.key==="j"||e.key==="ArrowDown"){state.sel=Math.min(state.sel+1,R.length-1);}
+  else if(e.key==="k"||e.key==="ArrowUp"){state.sel=Math.max(state.sel-1,0);}
+  else if(e.key==="f"){cycle();return;}
+  else return;
+  e.preventDefault();draw();
+  var s=ft.querySelector("tr.sel");if(s&&s.scrollIntoView)s.scrollIntoView({block:"nearest"});
+});
+draw();
 
-  var host=el("div"); app.appendChild(host);
-  function render(){
-    host.textContent="";
-    var table=el("table"),thead=el("thead"),tr=el("tr");
-    ["Severity","Rule","Finding","Location","ATT&CK"].forEach(function(h){tr.appendChild(el("th",null,h));});
-    thead.appendChild(tr);table.appendChild(thead);
-    var tb=el("tbody");
-    findings.filter(function(f){return active[f.severity];}).forEach(function(f){
-      var r=el("tr");
-      r.appendChild(el("td","sev "+f.severity,f.severity));
-      var rule=el("td"); rule.appendChild(el("code",null,f.rule_id)); r.appendChild(rule);
-      var d=el("td"); d.appendChild(el("div",null,f.title));
-      if(f.remediation)d.appendChild(el("div","rem",f.remediation)); r.appendChild(d);
-      var loc=el("td","loc"); var L=f.location||{};
-      loc.textContent=L.path?(L.path+(L.start_line?":"+L.start_line:"")):(L.pid?("pid "+L.pid):(L.artifact||"")); r.appendChild(loc);
-      var tc=el("td"); (f.attack_techniques||[]).forEach(function(t){tc.appendChild(el("span","tech",t));}); r.appendChild(tc);
-      tb.appendChild(r);
-    });
-    table.appendChild(tb); host.appendChild(table);
-  }
-  render();
-  app.appendChild(el("footer","","Generated by SentinelTriage · self-contained, no external resources"));
+var foot=el("div","foot"),bad=sum.threshold_breached;
+add(foot,el("span",bad?"crit":"ok",bad?"gate FAIL":"gate pass"),el("span","m","  findings at or above "+(sum.fail_on||"")+": "),
+  el("span","hi",F.filter(function(f){return RANK[f.severity]>=RANK[sum.fail_on||"high"];}).length));
+app.appendChild(foot);
 })();
 `

@@ -16,7 +16,7 @@ import (
 	"github.com/codext4fn-afk/sentineltriage/internal/config"
 	"github.com/codext4fn-afk/sentineltriage/internal/engine"
 	"github.com/codext4fn-afk/sentineltriage/internal/finding"
-	"github.com/codext4fn-afk/sentineltriage/internal/host/persistence"
+	"github.com/codext4fn-afk/sentineltriage/internal/host"
 	"github.com/codext4fn-afk/sentineltriage/internal/report"
 	"github.com/codext4fn-afk/sentineltriage/internal/report/html"
 	"github.com/codext4fn-afk/sentineltriage/internal/report/jsonout"
@@ -67,6 +67,10 @@ type App struct {
 	Stderr    io.Writer
 	StdoutTTY bool
 	StderrTTY bool
+	// ANSI reports that stdout interprets escape sequences. On Windows this
+	// requires switching the console into virtual-terminal mode first.
+	ANSI      bool
+	Width     int
 	Getenv    func(string) string
 	Hostname  func() (string, error)
 	Factories map[finding.Engine]Factory
@@ -74,7 +78,7 @@ type App struct {
 
 // New returns an App bound to the given process streams.
 func New(stdout, stderr *os.File) *App {
-	return &App{
+	a := &App{
 		Stdout:    stdout,
 		Stderr:    stderr,
 		StdoutTTY: isTerminal(stdout),
@@ -83,16 +87,20 @@ func New(stdout, stderr *os.File) *App {
 		Hostname:  os.Hostname,
 		Factories: DefaultFactories(),
 	}
+	a.ANSI = a.StdoutTTY && ui.EnableANSI(stdout)
+	if a.StderrTTY {
+		ui.EnableANSI(stderr)
+	}
+	a.Width, _ = ui.TermSize(stdout)
+	return a
 }
 
 // DefaultFactories returns the collectors compiled into this build. An enabled
 // engine with no factory contributes no collectors.
 func DefaultFactories() map[finding.Engine]Factory {
 	return map[finding.Engine]Factory{
-		finding.EngineHost: func(_ *config.Config, _ *slog.Logger) ([]engine.Collector, error) {
-			// persistence.New is build-tagged: a real root on Linux, an
-			// unsupported stub elsewhere that reports a coverage gap.
-			return []engine.Collector{persistence.New()}, nil
+		finding.EngineHost: func(cfg *config.Config, _ *slog.Logger) ([]engine.Collector, error) {
+			return host.Collectors(cfg.Engines.Host.Root)
 		},
 		finding.EngineAudit: func(cfg *config.Config, _ *slog.Logger) ([]engine.Collector, error) {
 			ae := cfg.Engines.Audit
@@ -169,21 +177,26 @@ func (a *App) Run(ctx context.Context, args []string) ExitCode {
 		return ExitRuntime
 	}
 
-	r := a.renderer(f)
+	// The renderer is created only after the engine validates, so a failed
+	// start never leaves the interactive view holding the terminal.
+	var r ui.Renderer
 	orch, err := engine.New(engine.Options{
 		Budget:      time.Duration(cfg.Budget),
 		UnitTimeout: time.Duration(cfg.CollectorTimeout),
 		Concurrency: cfg.Concurrency,
-		OnFinish:    r.CollectorDone,
+		OnFinish:    func(c engine.CollectorReport) { r.CollectorDone(c) },
 		Logger:      log,
 	}, collectors...)
 	if err != nil {
 		log.Error("engine initialisation failed", "error", err)
 		return ExitRuntime
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	r = a.renderer(f, cancel)
 
 	log.Info("run starting", "collectors", len(collectors), "budget", time.Duration(cfg.Budget).String())
-	res := orch.Run(ctx)
+	res := orch.Run(runCtx)
 
 	host, _ := a.Hostname()
 	meta := jsonout.Meta{ToolVersion: Version, Hostname: host, FailOn: cfg.FailOn}
@@ -205,7 +218,10 @@ func (a *App) Run(ctx context.Context, args []string) ExitCode {
 	}
 
 	code, reason := Decide(res, cfg.FailOn, cfg.MinCoverage, werr)
-	r.Summary(ui.RunSummary{Result: res, FailOn: cfg.FailOn, Reports: written, ExitCode: int(code), Reason: reason})
+	r.Summary(ui.RunSummary{
+		Result: res, FailOn: cfg.FailOn, Reports: written, ExitCode: int(code), Reason: reason,
+		Version: Version, Host: host,
+	})
 	log.Info("run finished", "exit_code", int(code), "reason", reason, "duration_ms", res.Duration().Milliseconds())
 	return code
 }
@@ -243,14 +259,15 @@ func (a *App) collectors(cfg *config.Config, log *slog.Logger) ([]engine.Collect
 	return out, nil
 }
 
-func (a *App) renderer(f *flags) ui.Renderer {
-	// The live view needs a real terminal and must not fight machine-readable
-	// stdout; fall back to plain output otherwise, even when --tui is set.
-	if f.tui && ui.TUIAvailable() && a.StdoutTTY && !f.quiet && f.stdoutFormat == stdoutSummary && a.Getenv("CI") == "" {
-		return ui.NewTUIRenderer(a.Stderr)
+func (a *App) renderer(f *flags, cancel func()) ui.Renderer {
+	// The interactive view needs a real terminal and must not fight
+	// machine-readable stdout; fall back to the static dashboard otherwise,
+	// even when --tui is set.
+	if f.tui && a.ANSI && !f.quiet && f.stdoutFormat == stdoutSummary && a.Getenv("CI") == "" {
+		return ui.NewTUIRenderer(a.Stdout, cancel)
 	}
-	color := !f.noColor && a.StdoutTTY && a.StderrTTY && a.Getenv("NO_COLOR") == "" && a.Getenv("CI") == ""
-	p := &ui.Plain{Progress: a.Stderr, Out: a.Stdout, Color: color}
+	color := f.color == "always" || (f.color == "auto" && a.ANSI && a.Getenv("NO_COLOR") == "" && a.Getenv("CI") == "")
+	p := &ui.Plain{Progress: a.Stderr, ProgressTTY: a.StderrTTY && !f.quiet, Out: a.Stdout, Color: color, Width: a.Width}
 	if f.quiet {
 		p.Progress = io.Discard
 	}

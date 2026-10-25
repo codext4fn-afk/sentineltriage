@@ -39,12 +39,13 @@ type flags struct {
 	reports          []string
 	sarifIncludeHost bool
 	stdoutFormat     string
-	procRoot         string
+	hostRoot         string
 	maxFileBytes     int64
 	logLevel         string
 	logFormat        string
 	quiet            bool
 	noColor          bool
+	color            string
 	tui              bool
 	printConfig      bool
 	version          bool
@@ -90,13 +91,14 @@ func parseFlags(args []string, stderr io.Writer) (*flags, error) {
 	fs.StringSliceVarP(&f.reports, "report", "r", nil, "report formats: json, sarif, html, none (repeatable)")
 	fs.BoolVar(&f.sarifIncludeHost, "sarif-include-host", false, "include host-engine findings in the SARIF file")
 	fs.StringVarP(&f.stdoutFormat, "format", "f", stdoutSummary, "stdout format: summary, json, none")
-	fs.StringVar(&f.procRoot, "proc-root", "", "procfs mount to triage (default /proc)")
+	fs.StringVar(&f.hostRoot, "host-root", "", "audit a mounted Linux filesystem at `DIR` instead of the live host")
 	fs.Int64Var(&f.maxFileBytes, "max-file-bytes", 0, "skip audited files larger than `N` bytes")
 	fs.StringVar(&f.logLevel, "log-level", "warn", "diagnostic log level: debug, info, warn, error")
 	fs.StringVar(&f.logFormat, "log-format", "auto", "diagnostic log format on stderr: auto, text, json")
 	fs.BoolVarP(&f.quiet, "quiet", "q", false, "suppress progress and summary output")
-	fs.BoolVar(&f.noColor, "no-color", false, "disable ANSI colors (also honours NO_COLOR)")
-	fs.BoolVar(&f.tui, "tui", false, "use the interactive live view (requires a -tags tui build and a TTY)")
+	fs.StringVar(&f.color, "color", "auto", "colorize output: auto, always, never (auto honours NO_COLOR)")
+	fs.BoolVar(&f.noColor, "no-color", false, "same as --color=never")
+	fs.BoolVarP(&f.tui, "tui", "i", false, "interactive full-screen view (requires a terminal)")
 	fs.BoolVar(&f.printConfig, "print-config", false, "print the effective configuration and exit")
 	fs.BoolVarP(&f.version, "version", "V", false, "print version information and exit")
 	fs.BoolVarP(&f.help, "help", "h", false, "show this help and exit")
@@ -118,6 +120,14 @@ func parseFlags(args []string, stderr io.Writer) (*flags, error) {
 	case stdoutSummary, stdoutJSON, stdoutNone:
 	default:
 		return nil, fmt.Errorf("invalid --format %q (want summary, json, or none)", f.stdoutFormat)
+	}
+	switch f.color {
+	case "auto", "always", "never":
+	default:
+		return nil, fmt.Errorf("invalid --color %q (want auto, always, or never)", f.color)
+	}
+	if f.noColor {
+		f.color = "never"
 	}
 	f.paths = fs.Args()
 	return f, nil
@@ -180,8 +190,8 @@ func (f *flags) apply(cfg *config.Config) error {
 		}
 		cfg.Output.Formats = formats
 	}
-	if ch("proc-root") {
-		cfg.Engines.Host.ProcRoot = f.procRoot
+	if ch("host-root") {
+		cfg.Engines.Host.Root = f.hostRoot
 	}
 	if ch("sarif-include-host") {
 		cfg.Output.SARIFIncludeHost = f.sarifIncludeHost

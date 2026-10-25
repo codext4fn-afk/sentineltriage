@@ -32,12 +32,12 @@ const (
 
 // Decide applies the exit-code precedence. Order matters:
 //
-//  1. Interrupted — the run is incomplete by operator intent.
-//  2. Report write failure — consumers would read stale or missing data.
-//  3. Findings at threshold — a confirmed finding outranks any coverage
+//  1. Interrupted: the run is incomplete by operator intent.
+//  2. Report write failure: consumers would read stale or missing data.
+//  3. Findings at threshold: a confirmed finding outranks any coverage
 //     concern; even a partial run that found a critical issue must fail
 //     the pipeline as "findings", the actionable signal.
-//  4. Nothing observed — a scanner that saw nothing must not report clean.
+//  4. Nothing observed: a scanner that saw nothing must not report clean.
 //  5. Coverage below threshold.
 func Decide(r *engine.Result, failOn finding.Severity, minCoverage float64, writeErr error) (ExitCode, string) {
 	switch {

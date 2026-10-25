@@ -23,8 +23,8 @@ func (Dockerfile) Name() string { return "drift.dockerfile" }
 
 // Applies matches files named Dockerfile or Containerfile, with or without a
 // stage suffix (Dockerfile.ci, api.Dockerfile).
-func (Dockerfile) Applies(f walker.File) bool {
-	b := path.Base(f.Rel)
+func (Dockerfile) Applies(rel string) bool {
+	b := path.Base(rel)
 	return b == "Dockerfile" || b == "Containerfile" ||
 		strings.HasPrefix(b, "Dockerfile.") || strings.HasSuffix(b, ".Dockerfile") ||
 		strings.HasPrefix(b, "Containerfile.")

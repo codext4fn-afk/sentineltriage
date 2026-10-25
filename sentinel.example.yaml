@@ -18,7 +18,7 @@ min_coverage: 0.0
 engines:
   host:
     enabled: true
-    proc_root: /proc
+    # root: /mnt/image   # audit a mounted Linux filesystem instead of this host
   audit:
     enabled: true
     paths: ["."]

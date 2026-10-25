@@ -1,4 +1,4 @@
-package persistence
+package linuxpersist
 
 import (
 	"context"
@@ -106,13 +106,6 @@ func TestSystemdUnitAndTimer(t *testing.T) {
 	w := rule(s, "host.persistence.unit-writable")
 	if w == nil || w.Techniques[0] != "T1053.006" {
 		t.Errorf("writable timer not mapped to T1053.006: %+v", w)
-	}
-}
-
-func TestUnsupportedPlatform(t *testing.T) {
-	err := Unsupported().Run(context.Background(), &sink{})
-	if err != engine.ErrUnsupported {
-		t.Errorf("err = %v, want ErrUnsupported", err)
 	}
 }
 

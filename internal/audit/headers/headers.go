@@ -21,13 +21,13 @@ func (Analyzer) Name() string { return "headers" }
 
 // Applies matches recognized server/hosting config files. The content check in
 // Analyze decides whether the file actually configures headers.
-func (Analyzer) Applies(f walker.File) bool {
-	base := path.Base(f.Rel)
+func (Analyzer) Applies(rel string) bool {
+	base := path.Base(rel)
 	switch base {
 	case "_headers", "vercel.json", "netlify.toml", ".htaccess", "nginx.conf":
 		return true
 	}
-	if strings.Contains(f.Rel, "sites-available/") || strings.Contains(f.Rel, "sites-enabled/") {
+	if strings.Contains(rel, "sites-available/") || strings.Contains(rel, "sites-enabled/") {
 		return true
 	}
 	ext := strings.ToLower(path.Ext(base))

@@ -57,9 +57,11 @@ var table = map[string]Technique{
 
 	"T1053":     {"T1053", "Scheduled Task/Job", []Tactic{TacticExecution, TacticPersistence, TacticPrivilegeEscalation}},
 	"T1053.003": {"T1053.003", "Scheduled Task/Job: Cron", []Tactic{TacticExecution, TacticPersistence, TacticPrivilegeEscalation}},
+	"T1053.005": {"T1053.005", "Scheduled Task/Job: Scheduled Task", []Tactic{TacticExecution, TacticPersistence, TacticPrivilegeEscalation}},
 	"T1053.006": {"T1053.006", "Scheduled Task/Job: Systemd Timers", []Tactic{TacticExecution, TacticPersistence, TacticPrivilegeEscalation}},
 
 	"T1059":     {"T1059", "Command and Scripting Interpreter", []Tactic{TacticExecution}},
+	"T1059.001": {"T1059.001", "Command and Scripting Interpreter: PowerShell", []Tactic{TacticExecution}},
 	"T1059.004": {"T1059.004", "Command and Scripting Interpreter: Unix Shell", []Tactic{TacticExecution}},
 
 	"T1070":     {"T1070", "Indicator Removal", []Tactic{TacticDefenseEvasion}},
@@ -68,8 +70,18 @@ var table = map[string]Technique{
 	"T1098":     {"T1098", "Account Manipulation", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
 	"T1098.004": {"T1098.004", "Account Manipulation: SSH Authorized Keys", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
 
+	"T1218":     {"T1218", "System Binary Proxy Execution", []Tactic{TacticDefenseEvasion}},
+	"T1218.005": {"T1218.005", "System Binary Proxy Execution: Mshta", []Tactic{TacticDefenseEvasion}},
+	"T1218.010": {"T1218.010", "System Binary Proxy Execution: Regsvr32", []Tactic{TacticDefenseEvasion}},
+	"T1218.011": {"T1218.011", "System Binary Proxy Execution: Rundll32", []Tactic{TacticDefenseEvasion}},
+
 	"T1543":     {"T1543", "Create or Modify System Process", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
 	"T1543.002": {"T1543.002", "Create or Modify System Process: Systemd Service", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
+	"T1543.003": {"T1543.003", "Create or Modify System Process: Windows Service", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
+
+	"T1547":     {"T1547", "Boot or Logon Autostart Execution", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
+	"T1547.001": {"T1547.001", "Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
+	"T1547.004": {"T1547.004", "Boot or Logon Autostart Execution: Winlogon Helper DLL", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
 
 	"T1546":     {"T1546", "Event Triggered Execution", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
 	"T1546.004": {"T1546.004", "Event Triggered Execution: Unix Shell Configuration Modification", []Tactic{TacticPersistence, TacticPrivilegeEscalation}},
@@ -81,6 +93,7 @@ var table = map[string]Technique{
 
 	"T1574":     {"T1574", "Hijack Execution Flow", []Tactic{TacticPersistence, TacticPrivilegeEscalation, TacticDefenseEvasion}},
 	"T1574.006": {"T1574.006", "Hijack Execution Flow: Dynamic Linker Hijacking", []Tactic{TacticPersistence, TacticPrivilegeEscalation, TacticDefenseEvasion}},
+	"T1574.009": {"T1574.009", "Hijack Execution Flow: Path Interception by Unquoted Path", []Tactic{TacticPersistence, TacticPrivilegeEscalation, TacticDefenseEvasion}},
 
 	"T1611": {"T1611", "Escape to Host", []Tactic{TacticPrivilegeEscalation}},
 
